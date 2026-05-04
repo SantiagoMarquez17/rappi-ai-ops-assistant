@@ -10,3 +10,4 @@ data/processed/*.duckdb
 outputs/*.html
 outputs/*.md
 outputs/*.csv
+DEMO_GUIDE.md
