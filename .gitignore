@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.streamlit/secrets.toml
+data/raw/*.xlsx
+data/raw/*.csv
+data/processed/*.parquet
+data/processed/*.duckdb
+outputs/*.html
+outputs/*.md
+outputs/*.csv
