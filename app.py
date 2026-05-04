@@ -176,10 +176,19 @@ with tab_insights:
     st.subheader("Insights automaticos")
     st.write("Hallazgos generados con reglas reproducibles sobre la tabla SQL local.")
 
-    if st.button("Generar insights", type="primary"):
-        st.cache_data.clear()
+    if "insights_last_generated" not in st.session_state:
+        st.session_state.insights_last_generated = "Inicial"
 
-    insight_sections, markdown_report = cached_insights()
+    if st.button("Generar insights", type="primary"):
+        cached_insights.clear()
+        with st.spinner("Analizando anomalias, tendencias, benchmarks, correlaciones y oportunidades..."):
+            insight_sections, markdown_report = cached_insights()
+        st.session_state.insights_last_generated = "Actualizado en esta sesion"
+        st.success("Insights regenerados correctamente.")
+    else:
+        insight_sections, markdown_report = cached_insights()
+
+    st.caption(f"Estado del reporte: {st.session_state.insights_last_generated}")
 
     st.download_button(
         "Descargar reporte Markdown",
