@@ -70,7 +70,7 @@ tab_chat, tab_insights, tab_top, tab_compare, tab_trend, tab_multi, tab_data = s
 )
 
 with tab_chat:
-    st.subheader("Bot conversacional de datos")
+    st.subheader("Chat operacional")
 
     examples = [
         "Cuales son las 5 zonas con mayor Lead Penetration esta semana?",
@@ -82,48 +82,30 @@ with tab_chat:
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-    if "pending_question" not in st.session_state:
-        st.session_state.pending_question = None
 
-    top_left, top_right = st.columns([3, 1])
-    with top_left:
-        bot_mode = st.radio(
-            "Modo de respuesta",
-            ["Deterministico", "LLM + guardrails"],
-            horizontal=True,
-            help="El modo LLM interpreta la pregunta con OpenAI, pero la consulta SQL sigue controlada por la aplicacion.",
-        )
-    with top_right:
-        if st.button("Limpiar chat", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.pending_question = None
-            st.rerun()
+    bot_mode = st.radio(
+        "Modo de respuesta",
+        ["Deterministico", "LLM + guardrails"],
+        horizontal=True,
+        help="El modo LLM interpreta la pregunta con OpenAI, pero la consulta SQL sigue controlada por la aplicacion.",
+    )
 
-    st.caption("Preguntas sugeridas")
-    example_cols = st.columns(len(examples))
-    for idx, example in enumerate(examples):
-        if example_cols[idx].button(f"Ejemplo {idx + 1}", help=example, use_container_width=True):
-            st.session_state.pending_question = example
+    if not st.session_state.chat_history:
+        with st.chat_message("assistant"):
+            st.write(
+                "Hola. Puedo ayudarte a consultar rankings, comparaciones, tendencias, "
+                "crecimiento de ordenes y cruces entre metricas operacionales."
+            )
 
-    user_input = st.chat_input("Pregunta sobre metricas, zonas, paises o tendencias")
-    question = st.session_state.pending_question or user_input
-    st.session_state.pending_question = None
-
-    if question:
-        if bot_mode == "LLM + guardrails":
-            response = answer_question_with_llm(question)
-        else:
-            response = answer_question(question)
-        st.session_state.chat_history.append((question, response))
-        st.rerun()
-
-    for user_question, response in st.session_state.chat_history[-5:]:
+    for message_idx, (user_question, response) in enumerate(st.session_state.chat_history[-8:]):
         with st.chat_message("user"):
             st.write(user_question)
 
         with st.chat_message("assistant"):
             st.write(response.answer)
             st.dataframe(response.data, use_container_width=True, hide_index=True)
+
+            chart_key = f"chat_chart_{message_idx}_{response.chart_type}_{len(response.data)}"
 
             if response.chart_type == "bar" and not response.data.empty:
                 numeric_cols = response.data.select_dtypes(include="number").columns.tolist()
@@ -132,7 +114,7 @@ with tab_chat:
                 if y_col:
                     color_col = "COUNTRY" if "COUNTRY" in response.data.columns else None
                     fig = px.bar(response.data, x=x_col, y=y_col, color=color_col)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_bar")
 
             if response.chart_type == "line" and not response.data.empty:
                 fig = px.line(
@@ -141,7 +123,7 @@ with tab_chat:
                     y="metric_value",
                     markers=True,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_line")
 
             if response.chart_type == "scatter" and not response.data.empty:
                 if {"high_metric_value", "low_metric_value", "orders"}.issubset(response.data.columns):
@@ -153,7 +135,7 @@ with tab_chat:
                         color="COUNTRY",
                         hover_data=["CITY", "ZONE", "ZONE_TYPE"],
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_scatter")
 
             if response.followups:
                 st.caption("Sugerencias de seguimiento")
@@ -162,6 +144,33 @@ with tab_chat:
 
             with st.expander("Ver SQL ejecutado"):
                 st.code(response.sql, language="sql")
+
+    st.divider()
+    st.caption("Preguntas sugeridas")
+    example_cols = st.columns(2)
+    for idx, example in enumerate(examples):
+        if example_cols[idx % 2].button(example, key=f"chat_example_{idx}", use_container_width=True):
+            with st.spinner("Consultando datos..."):
+                if bot_mode == "LLM + guardrails":
+                    response = answer_question_with_llm(example)
+                else:
+                    response = answer_question(example)
+            st.session_state.chat_history.append((example, response))
+            st.rerun()
+
+    user_input = st.chat_input("Pregunta sobre metricas, zonas, paises o tendencias")
+    if user_input:
+        with st.spinner("Consultando datos..."):
+            if bot_mode == "LLM + guardrails":
+                response = answer_question_with_llm(user_input)
+            else:
+                response = answer_question(user_input)
+        st.session_state.chat_history.append((user_input, response))
+        st.rerun()
+
+    if st.button("Limpiar chat", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
 
 with tab_insights:
     st.subheader("Insights automaticos")
