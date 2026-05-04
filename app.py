@@ -80,26 +80,44 @@ with tab_chat:
         "Cuales son las zonas que mas crecen en ordenes en las ultimas 5 semanas?",
     ]
 
-    selected_example = st.selectbox("Preguntas sugeridas", examples)
-    bot_mode = st.radio(
-        "Modo de respuesta",
-        ["Deterministico", "LLM + guardrails"],
-        horizontal=True,
-        help="El modo LLM interpreta la pregunta con OpenAI, pero la consulta SQL sigue controlada por la aplicacion.",
-    )
-    question = st.text_input("Pregunta", value=selected_example)
-
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+    if "pending_question" not in st.session_state:
+        st.session_state.pending_question = None
 
-    if st.button("Preguntar", type="primary"):
+    top_left, top_right = st.columns([3, 1])
+    with top_left:
+        bot_mode = st.radio(
+            "Modo de respuesta",
+            ["Deterministico", "LLM + guardrails"],
+            horizontal=True,
+            help="El modo LLM interpreta la pregunta con OpenAI, pero la consulta SQL sigue controlada por la aplicacion.",
+        )
+    with top_right:
+        if st.button("Limpiar chat", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.pending_question = None
+            st.rerun()
+
+    st.caption("Preguntas sugeridas")
+    example_cols = st.columns(len(examples))
+    for idx, example in enumerate(examples):
+        if example_cols[idx].button(f"Ejemplo {idx + 1}", help=example, use_container_width=True):
+            st.session_state.pending_question = example
+
+    user_input = st.chat_input("Pregunta sobre metricas, zonas, paises o tendencias")
+    question = st.session_state.pending_question or user_input
+    st.session_state.pending_question = None
+
+    if question:
         if bot_mode == "LLM + guardrails":
             response = answer_question_with_llm(question)
         else:
             response = answer_question(question)
         st.session_state.chat_history.append((question, response))
+        st.rerun()
 
-    for user_question, response in reversed(st.session_state.chat_history[-5:]):
+    for user_question, response in st.session_state.chat_history[-5:]:
         with st.chat_message("user"):
             st.write(user_question)
 
@@ -126,11 +144,11 @@ with tab_chat:
                 st.plotly_chart(fig, use_container_width=True)
 
             if response.chart_type == "scatter" and not response.data.empty:
-                if {"lead_penetration", "perfect_orders", "orders"}.issubset(response.data.columns):
+                if {"high_metric_value", "low_metric_value", "orders"}.issubset(response.data.columns):
                     fig = px.scatter(
                         response.data,
-                        x="lead_penetration",
-                        y="perfect_orders",
+                        x="high_metric_value",
+                        y="low_metric_value",
                         size="orders",
                         color="COUNTRY",
                         hover_data=["CITY", "ZONE", "ZONE_TYPE"],

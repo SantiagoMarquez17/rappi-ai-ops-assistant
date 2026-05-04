@@ -40,12 +40,21 @@ Return this JSON shape:
   "city": null,
   "zone": null,
   "week_lag": 0,
+  "weeks_back": 8,
   "limit": 5,
   "high_metric": null,
   "low_metric": null,
   "high_threshold": null,
   "low_threshold": null
 }
+
+Rules:
+- If the user asks "ultimas N semanas", set "weeks_back" to N.
+- If the user asks "top N" or "N zonas", set "limit" to N.
+- If the user asks "esta semana", set "week_lag" to 0.
+- For high/low questions, fill high_metric, low_metric, high_threshold and low_threshold when explicit.
+- If a threshold is not explicit, use null and let the backend defaults apply.
+- If the question asks for growth in orders over N weeks, use intent "order_growth" and weeks_back N.
 """
 
 

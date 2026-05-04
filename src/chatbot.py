@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 
 import pandas as pd
 
@@ -111,11 +112,25 @@ def detect_country(question_clean: str, countries: list[str]) -> str | None:
     return None
 
 
-def trend_query(metric: str, zone: str, country: str | None = None, city: str | None = None) -> BotResponse:
+def detect_weeks_back(question_clean: str, default: int = 8) -> int:
+    match = re.search(r"ULTIMAS? (\d+) SEMANAS?", question_clean)
+    if not match:
+        return default
+    return max(1, min(int(match.group(1)), 9))
+
+
+def trend_query(
+    metric: str,
+    zone: str,
+    country: str | None = None,
+    city: str | None = None,
+    weeks_back: int = 8,
+) -> BotResponse:
+    max_week_lag = max(0, min(weeks_back - 1, 8))
     filters = [
         f"METRIC = '{metric}'",
         f"ZONE = '{zone}'",
-        "WEEK_LAG BETWEEN 0 AND 8",
+        f"WEEK_LAG BETWEEN 0 AND {max_week_lag}",
     ]
     if country:
         filters.append(f"COUNTRY = '{country}'")
@@ -134,7 +149,7 @@ def trend_query(metric: str, zone: str, country: str | None = None, city: str | 
     """
     data = run_query(sql)
     return BotResponse(
-        answer=f"Evolucion de {metric} en {zone}. Uso promedio si la zona aparece en mas de una ciudad/pais.",
+        answer=f"Evolucion de {metric} en {zone} durante las ultimas {weeks_back} semanas. Uso promedio si la zona aparece en mas de una ciudad/pais.",
         sql=sql,
         data=data,
         chart_type="line",
@@ -204,7 +219,14 @@ def compare_zone_type_query(metric: str, country: str) -> BotResponse:
     )
 
 
-def high_low_query() -> BotResponse:
+def high_low_query(
+    high_metric: str = "Lead Penetration",
+    low_metric: str = "Perfect Orders",
+    high_threshold: float = 0.70,
+    low_threshold: float = 0.80,
+    week_lag: int = 0,
+    limit: int = 10,
+) -> BotResponse:
     sql = f"""
         WITH current_week AS (
             SELECT
@@ -217,8 +239,8 @@ def high_low_query() -> BotResponse:
                 METRIC_VALUE,
                 ORDERS_VALUE
             FROM {TABLE_NAME}
-            WHERE WEEK_LAG = 0
-              AND METRIC IN ('Lead Penetration', 'Perfect Orders')
+            WHERE WEEK_LAG = {week_lag}
+              AND METRIC IN ('{high_metric}', '{low_metric}')
         ),
         pivoted AS (
             SELECT
@@ -227,22 +249,22 @@ def high_low_query() -> BotResponse:
                 ZONE,
                 ZONE_KEY,
                 ZONE_TYPE,
-                MAX(CASE WHEN METRIC = 'Lead Penetration' THEN METRIC_VALUE END) AS lead_penetration,
-                MAX(CASE WHEN METRIC = 'Perfect Orders' THEN METRIC_VALUE END) AS perfect_orders,
+                MAX(CASE WHEN METRIC = '{high_metric}' THEN METRIC_VALUE END) AS high_metric_value,
+                MAX(CASE WHEN METRIC = '{low_metric}' THEN METRIC_VALUE END) AS low_metric_value,
                 MAX(ORDERS_VALUE) AS orders
             FROM current_week
             GROUP BY COUNTRY, CITY, ZONE, ZONE_KEY, ZONE_TYPE
         )
         SELECT *
         FROM pivoted
-        WHERE lead_penetration >= 0.70
-          AND perfect_orders <= 0.80
+        WHERE high_metric_value >= {high_threshold}
+          AND low_metric_value <= {low_threshold}
         ORDER BY orders DESC NULLS LAST
-        LIMIT 10
+        LIMIT {limit}
     """
     data = run_query(sql)
     return BotResponse(
-        answer="Zonas con alto Lead Penetration pero bajo Perfect Orders en la semana actual.",
+        answer=f"Zonas con alto {high_metric} y bajo {low_metric} en la semana L{week_lag}W.",
         sql=sql,
         data=data,
         chart_type="scatter",
@@ -253,7 +275,8 @@ def high_low_query() -> BotResponse:
     )
 
 
-def growth_orders_query() -> BotResponse:
+def growth_orders_query(weeks_back: int = 5, limit: int = 10) -> BotResponse:
+    max_week_lag = max(1, min(weeks_back, 8))
     sql = f"""
         WITH zone_orders AS (
             SELECT DISTINCT
@@ -264,7 +287,7 @@ def growth_orders_query() -> BotResponse:
                 WEEK_LAG,
                 ORDERS_VALUE
             FROM {TABLE_NAME}
-            WHERE WEEK_LAG BETWEEN 0 AND 5
+            WHERE WEEK_LAG BETWEEN 0 AND {max_week_lag}
               AND HAS_ORDERS_MATCH
         ),
         growth AS (
@@ -273,7 +296,7 @@ def growth_orders_query() -> BotResponse:
                 CITY,
                 ZONE,
                 ZONE_KEY,
-                MAX(CASE WHEN WEEK_LAG = 5 THEN ORDERS_VALUE END) AS orders_l5w,
+                MAX(CASE WHEN WEEK_LAG = {max_week_lag} THEN ORDERS_VALUE END) AS orders_start,
                 MAX(CASE WHEN WEEK_LAG = 0 THEN ORDERS_VALUE END) AS orders_l0w
             FROM zone_orders
             GROUP BY COUNTRY, CITY, ZONE, ZONE_KEY
@@ -282,19 +305,19 @@ def growth_orders_query() -> BotResponse:
             COUNTRY,
             CITY,
             ZONE,
-            orders_l5w,
+            orders_start,
             orders_l0w,
-            orders_l0w - orders_l5w AS absolute_growth,
-            ROUND((orders_l0w - orders_l5w) / NULLIF(orders_l5w, 0), 4) AS pct_growth
+            orders_l0w - orders_start AS absolute_growth,
+            ROUND((orders_l0w - orders_start) / NULLIF(orders_start, 0), 4) AS pct_growth
         FROM growth
-        WHERE orders_l5w IS NOT NULL
+        WHERE orders_start IS NOT NULL
           AND orders_l0w IS NOT NULL
         ORDER BY pct_growth DESC NULLS LAST
-        LIMIT 10
+        LIMIT {limit}
     """
     data = run_query(sql)
     return BotResponse(
-        answer="Estas son las zonas que mas crecieron en ordenes entre L5W y L0W. Posibles explicaciones deben validarse cruzando metricas de conversion, calidad y adopcion.",
+        answer=f"Estas son las zonas que mas crecieron en ordenes entre L{max_week_lag}W y L0W. Posibles explicaciones deben validarse cruzando metricas de conversion, calidad y adopcion.",
         sql=sql,
         data=data,
         chart_type="bar",
@@ -312,9 +335,10 @@ def answer_question(question: str) -> BotResponse:
     country = detect_country(question_clean, values["countries"])
     zone = find_value(question_clean, values["zones"])
     city = find_value(question_clean, values["cities"])
+    weeks_back = detect_weeks_back(question_clean)
 
     if "CREC" in question_clean and ("ORDEN" in question_clean or "ORDER" in question_clean):
-        return growth_orders_query()
+        return growth_orders_query(weeks_back=weeks_back)
 
     if "ALTO" in question_clean and "BAJO" in question_clean:
         return high_low_query()
@@ -323,7 +347,7 @@ def answer_question(question: str) -> BotResponse:
         return compare_zone_type_query(metric=metric, country=country or "Mexico")
 
     if "EVOLUC" in question_clean or "TENDENCIA" in question_clean or "ULTIMAS" in question_clean:
-        return trend_query(metric=metric, zone=zone or "Chapinero", country=country, city=city)
+        return trend_query(metric=metric, zone=zone or "Chapinero", country=country, city=city, weeks_back=weeks_back)
 
     if "TOP" in question_clean or "MAYOR" in question_clean or "5" in question_clean:
         return top_zones_query(metric=metric, country=country, limit=5)
@@ -341,15 +365,30 @@ def execute_plan(plan: dict, question: str) -> BotResponse:
     zone = normalize_plan_value(plan.get("zone"), values["zones"])
     limit = int(plan.get("limit") or 5)
     limit = max(1, min(limit, 20))
+    week_lag = int(plan.get("week_lag") or 0)
+    week_lag = max(0, min(week_lag, 8))
+    weeks_back = int(plan.get("weeks_back") or 8)
+    weeks_back = max(1, min(weeks_back, 9))
+    high_metric = normalize_plan_value(plan.get("high_metric"), values["metrics"]) or "Lead Penetration"
+    low_metric = normalize_plan_value(plan.get("low_metric"), values["metrics"]) or "Perfect Orders"
+    high_threshold = float(plan.get("high_threshold") or 0.70)
+    low_threshold = float(plan.get("low_threshold") or 0.80)
 
     if intent == "order_growth":
-        response = growth_orders_query()
+        response = growth_orders_query(weeks_back=weeks_back, limit=limit)
     elif intent == "high_low":
-        response = high_low_query()
+        response = high_low_query(
+            high_metric=high_metric,
+            low_metric=low_metric,
+            high_threshold=high_threshold,
+            low_threshold=low_threshold,
+            week_lag=week_lag,
+            limit=limit,
+        )
     elif intent == "compare_zone_type":
         response = compare_zone_type_query(metric=metric, country=country or "Mexico")
     elif intent == "trend":
-        response = trend_query(metric=metric, zone=zone or "Chapinero", country=country, city=city)
+        response = trend_query(metric=metric, zone=zone or "Chapinero", country=country, city=city, weeks_back=weeks_back)
     elif intent == "top_zones":
         response = top_zones_query(metric=metric, country=country, limit=limit)
     else:
